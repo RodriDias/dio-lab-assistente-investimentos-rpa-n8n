@@ -89,11 +89,19 @@ clientes. Dispará-las todas de uma vez fazia metade falhar por limite de taxa. 
 são o compromisso que encontrei: suficiente para o limite de taxa não disparar, e curto o
 bastante para a corrida completa ficar por volta de um minuto.
 
-Os dois nós de modelo têm `timeout` e `maxRetries: 0`. Sem isso, um modelo gratuito que
+O nó do modelo principal tem `timeout` e `maxRetries: 0`. Sem isso, um modelo gratuito que
 simplesmente não responde — e aconteceu-me com um — deixa a execução pendurada em
 `running` para sempre, em vez de falhar e deixar a reserva entrar. Um provedor mudo é um
 caso mais chato do que um provedor que recusa: a recusa é imediata e tratável, o silêncio
 não. Falhar depressa é um requisito, não uma otimização.
+
+O nó do Gemini, que é a reserva, não tem essa proteção: as suas opções são `temperature`,
+`maxOutputTokens`, `topK`, `topP` e as definições de segurança — `timeout` e `maxRetries`
+existem apenas nos nós compatíveis com OpenAI. Fica como limitação conhecida. Na prática o
+risco é pequeno, porque o Gemini só é chamado quando o principal falha e hoje recusa de
+imediato em vez de ficar calado; as formas de o fechar seriam um timeout ao nível do
+workflow, que mata a execução inteira e perde as mensagens já geradas, ou substituir o nó
+por um compatível com OpenAI apontado ao endpoint equivalente do Google.
 
 ## 7. O webhook está autenticado porque é um URL público
 
