@@ -147,6 +147,21 @@ tomaria: o Bruno perde o Fundo Multimercado (mínimo R$ 5.000) e o Daniel perde 
 Liquidez Diária (mínimo R$ 1.000), porque o saldo não lá chega. À direita,
 `email_valido` e `erro_validacao`.
 
+### As mensagens geradas pelo modelo
+
+![Saída do nó Finalizar (IA) com uma mensagem gerada pelo modelo](prints/08-ia-gerada.png)
+
+Output do `Finalizar (IA)` numa corrida com `--com-ia`. A mensagem da Elena foi escrita
+pelo modelo, a partir do perfil, do saldo e do produto que o código já tinha escolhido, e
+o campo `origem` regista isso com `"ia"`.
+
+![Saída do mesmo nó numa mensagem recuperada pelo template](prints/07-ia-fallback.png)
+
+A mesma execução, outro cliente. O modelo não respondeu a esta chamada — limite de taxa do
+free tier — e a mensagem saiu pelo template, com `origem` a dizê-lo. Nesta corrida foram
+seis por IA e quatro por template: é o fallback do ponto 5 das decisões a funcionar, em vez
+de a execução falhar ou de o cliente ficar sem mensagem.
+
 ### O ramo de erro
 
 ![Execução em modo produção com o alerta no Telegram](prints/04-ramo-de-erro.png)
