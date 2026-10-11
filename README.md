@@ -78,7 +78,7 @@ envia correio para fora deve falhar para o lado seguro.
 
 ## Como executar
 
-Importar `n8n/workflow.json` no n8n e criar quatro credenciais na instância: uma
+Importar `n8n/workflow.json` no n8n e criar quatro credenciais no n8n: uma
 *Header Auth* com o cabeçalho `X-RPA-Token` e um token à escolha, uma do modelo de
 linguagem, uma do Gmail e uma do Telegram.
 

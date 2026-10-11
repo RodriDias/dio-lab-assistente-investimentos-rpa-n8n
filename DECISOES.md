@@ -76,17 +76,18 @@ O enunciado sugere Gemini. Comecei por aí e esbarrei em duas coisas:
 - `models/gemini-2.0-flash` e `models/gemini-1.5-flash` devolvem *resource not found*.
   O que responde é `models/gemini-2.5-flash`.
 - Mesmo com o nome certo, o free tier recusa com *too many requests* a partir da quarta
-  ou quinta chamada seguida. A quota é por minuto e está partilhada com os outros
-  workflows da mesma instância, portanto não depende só deste fluxo.
+  ou quinta chamada seguida. A quota é por minuto e aplica-se à conta, não a cada
+  workflow, por isso não depende só deste fluxo.
 
 Em vez de aceitar um resultado que varia a cada corrida, o nó do agente tem dois modelos
 ligados: um modelo gratuito via OpenRouter como principal, e o Gemini como reserva na
 entrada de fallback. Provedores diferentes, quotas diferentes: a recusa de um não manda a
 mensagem para o template.
 
-Além disso, as chamadas passam por um `Loop Over Items` com uma espera entre clientes.
-Dispará-las todas de uma vez fazia metade falhar por limite de taxa. A espera começou em
-5 segundos e teve de descer para 2 pela razão do ponto 7.
+Além disso, as chamadas passam por um `Loop Over Items` com uma espera de 2 segundos entre
+clientes. Dispará-las todas de uma vez fazia metade falhar por limite de taxa. Dois segundos
+são o compromisso que encontrei: suficiente para o limite de taxa não disparar, e curto o
+bastante para a corrida completa ficar por volta de um minuto.
 
 Os dois nós de modelo têm `timeout` e `maxRetries: 0`. Sem isso, um modelo gratuito que
 simplesmente não responde — e aconteceu-me com um — deixa a execução pendurada em
@@ -94,32 +95,18 @@ simplesmente não responde — e aconteceu-me com um — deixa a execução pend
 caso mais chato do que um provedor que recusa: a recusa é imediata e tratável, o silêncio
 não. Falhar depressa é um requisito, não uma otimização.
 
-## 7. O túnel corta a resposta aos 100 segundos
+## 7. O webhook está autenticado porque é um URL público
 
-A instância do n8n é servida por um túnel da Cloudflare, e a Cloudflare fecha a ligação se
-a origem demorar mais de cerca de 100 segundos a responder. Com dez clientes e 5 segundos
-de espera entre chamadas ao modelo, a execução passava dos 110 segundos: o workflow
-terminava bem do lado do n8n, mas o RPA recebia um erro `524` e nunca via as mensagens.
-
-Baixei a espera para 2 segundos, o que põe a corrida completa por volta dos 50 a 60
-segundos, com margem. A alternativa mais correta para uso real seria outra arquitetura: o
-webhook responder de imediato com um "recebido" e o resultado ser entregue por outro
-caminho, em vez de manter o pedido HTTP aberto durante a geração das dez mensagens. Para
-este desafio, em que o enunciado quer ver as mensagens a voltar ao script, a resposta
-síncrona é o que faz sentido — mas é uma decisão com um tecto conhecido, e o tecto é este.
-
-## 8. O webhook está autenticado porque a instância está na internet
-
-O n8n desta montagem está exposto por um túnel, com URL público. Um webhook sem
-autenticação significa que qualquer pessoa que descubra o endereço pode injetar clientes
-inventados no fluxo. O nó do webhook está atrás de *Header Auth*, com um token em
-`X-RPA-Token`.
+Um webhook é um URL público. Sem autenticação, qualquer pessoa que descubra o endereço
+pode injetar clientes inventados no fluxo — e, com o envio de email ligado, fazer sair
+mensagens em nome de quem o publicou. O nó do webhook está atrás de *Header Auth*, com um
+token no cabeçalho `X-RPA-Token`.
 
 O token vive em dois sítios: numa credencial do n8n e numa variável de ambiente na máquina
 que corre o RPA. Não está neste repositório, que é público, e é por isso que o script lê
 `RPA_TOKEN` do ambiente em vez de o ter no código.
 
-## 9. Um só workflow para o MVP e para o desafio completo
+## 8. Um só workflow para o MVP e para o desafio completo
 
 O corpo do pedido traz um campo `usar_ia`. Um nó `IF` desvia para o ramo da IA ou para o
 ramo do template, e os dois voltam a juntar-se no `Responder ao RPA`. Dois ficheiros
@@ -129,7 +116,7 @@ cruzamento — que é a parte que ambos partilham.
 Do lado do RPA é a diferença entre `python extrair_clientes.py` e
 `python extrair_clientes.py --com-ia`.
 
-## 10. A validação do email tem três camadas, e a terceira não é técnica
+## 9. A validação do email tem três camadas, e a terceira não é técnica
 
 O nó de validação verifica, por esta ordem:
 
@@ -151,7 +138,7 @@ O preço desta decisão é um falso negativo: um cliente real com endereço `@em
 bloqueado por engano. Num uso a sério tira-se esse domínio da lista. Preferi o falso
 negativo ao alternativo, porque um email a mais não se desfaz.
 
-## 11. Validar antes de gerar a mensagem, não depois
+## 10. Validar antes de gerar a mensagem, não depois
 
 A ordem natural seria gerar a mensagem e validar o endereço antes de enviar. Pus a
 validação primeiro, logo depois do cruzamento, por uma razão concreta: um cliente com
@@ -162,7 +149,7 @@ mensagens que vão para o lixo é o pior sítio onde a gastar.
 O alerta no Telegram não perde nada com isso: leva o cliente e o motivo, que é o que é
 preciso para agir. A mensagem que não foi gerada não acrescentaria informação.
 
-## 12. Um alerta no Telegram, não dez
+## 11. Um alerta no Telegram, não dez
 
 Com os dados do desafio em modo produção, os dez clientes são bloqueados. Um nó de Telegram
 ligado diretamente ao ramo de erro enviaria dez notificações seguidas, o que no telefone é
@@ -172,12 +159,13 @@ O nó `Agrupar erros` junta todas as falhas da execução num único item antes 
 modo, o momento e uma linha por cliente. Uma notificação com dez linhas é informação; dez
 notificações com uma linha são um incómodo.
 
-## 13. A resposta ao RPA sai antes dos envios
+## 12. A resposta ao RPA sai antes dos envios
 
 O nó `Responder ao RPA` está antes do Gmail e do Telegram, e não depois. Isto parece
-contraintuitivo — responder antes de ter feito o trabalho — mas resolve o problema do ponto
-7: a resposta HTTP tem de caber nos ~100 segundos do túnel, e dez envios de email dentro
-dessa janela não cabem com margem nenhuma.
+contraintuitivo — responder antes de ter feito o trabalho — mas evita que o pedido HTTP
+fique aberto à espera de dez envios de email. Proxies, balanceadores e clientes HTTP
+fecham ligações que demoram demasiado, e a geração das mensagens já ocupa boa parte do
+orçamento de tempo.
 
 A resposta leva o estado de cada cliente — `email_valido`, `destinatario_efetivo`,
 `erro_validacao` — portanto o RPA sabe o que vai acontecer a cada um. O que o RPA não vê é
@@ -187,7 +175,7 @@ Um detalhe que me custou uma depuração: como os nós de envio correm **depois*
 a execução só é gravada quando eles terminam. Consultar a API logo após receber a resposta
 devolve a execução anterior, não esta.
 
-## 14. O email é HTML, e o texto do modelo é tratado como dados
+## 13. O email é HTML, e o texto do modelo é tratado como dados
 
 O corpo do email é montado num nó de Code (`Montar email HTML`) e não numa expressão dentro
 do nó do Gmail. Uma expressão com um documento HTML inteiro fica ilegível no editor, não se
@@ -223,9 +211,8 @@ mensagem multipart com as duas alternativas. É uma limitação do nó, não uma
   do LLM, é da regra do ponto 3. Mesmo assim, uma reformulação do tipo "16,0% ao ano"
   quando o CSV diz apenas `16.0%` é possível. É um dos sítios onde eu não deixaria isto
   ir para produção sem revisão humana.
-- **O RPA não confirma a entrega.** Pela razão do ponto 13, uma falha do Gmail depois da
-  resposta aparece na execução do n8n e no workflow de erros da instância, mas não no
-  output do script.
+- **O RPA não confirma a entrega.** Pela razão do ponto 12, uma falha do Gmail depois da
+  resposta aparece nos registos de execução do n8n, mas não no output do script.
 - **A consulta de MX depende de um serviço externo.** Se o resolvedor de DNS não responder,
   o nó está configurado para continuar, e o cliente é tratado como inválido. Falha para o
   lado de não enviar, que é o lado certo neste fluxo.
