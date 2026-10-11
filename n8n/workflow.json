@@ -9,7 +9,7 @@
         "responseMode": "responseNode",
         "options": {}
       },
-      "id": "d2d5778b-f1e8-434f-88e7-0ffc4b11e1e0",
+      "id": "b8c4af4e-afc0-46b4-b708-40dd610adb67",
       "name": "Webhook: clientes do RPA",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
@@ -17,7 +17,7 @@
         -800,
         300
       ],
-      "webhookId": "46f9bf53-81b0-4675-a35f-b211f3553556",
+      "webhookId": "d62c3698-d11e-496c-9ede-cfc0f0076ba2",
       "credentials": {
         "httpHeaderAuth": {
           "id": "O3VnEbQ814PPVaIH",
@@ -29,7 +29,7 @@
       "parameters": {
         "jsCode": "// Valida o corpo do pedido e garante que o saldo e numero antes de qualquer comparacao.\nconst entrada = $input.first().json;\nconst corpo = entrada.body ?? entrada;\nconst brutos = corpo.clientes;\n\nif (!Array.isArray(brutos) || brutos.length === 0) {\n  throw new Error('Corpo do pedido sem a lista \"clientes\".');\n}\n\n// 'R$ 12.500,00' -> 12500. Em pt-BR o ponto e milhar e a virgula e decimal, ao\n// contrario do que Number() espera: sem isto, 'R$ 850,00' viraria 85000 e\n// 'R$ 12.500,00' viraria 12.5, e a comparacao com o minimo do produto fica errada.\nfunction saldoParaNumero(valor) {\n  if (typeof valor === 'number' && Number.isFinite(valor)) return valor;\n  const limpo = String(valor ?? '').replace(/[^\\d,.]/g, '').replace(/\\./g, '').replace(',', '.');\n  const numero = Number.parseFloat(limpo);\n  if (!Number.isFinite(numero)) throw new Error(`Saldo ilegivel: ${JSON.stringify(valor)}`);\n  return numero;\n}\n\nconst clientes = brutos.map((c) => ({\n  nome: String(c.nome ?? '').trim(),\n  email: String(c.email ?? '').trim(),\n  perfil: String(c.perfil ?? '').trim(),\n  saldo_texto: c.saldo_texto ?? String(c.saldo ?? ''),\n  saldo: saldoParaNumero(c.saldo ?? c.saldo_texto),\n}));\n\nconst incompletos = clientes.filter((c) => !c.nome || !c.perfil);\nif (incompletos.length > 0) {\n  throw new Error(`${incompletos.length} cliente(s) sem nome ou sem perfil.`);\n}\n\n// O modo decide o destinatario do email. Omisso ou invalido cai em 'demo', que\n// envia para o operador: um fluxo que manda correio para fora deve falhar para o\n// lado seguro, nao para o lado conveniente.\nconst modo = ['demo', 'producao'].includes(corpo.modo) ? corpo.modo : 'demo';\nconst email_demo = String(corpo.email_demo ?? 'operador@exemplo.com').trim();\n\n// Um unico item ate ao cruzamento: assim o CSV e buscado uma vez, nao uma por cliente.\nreturn [{ json: { clientes, usar_ia: corpo.usar_ia === true, modo, email_demo, recebidos: clientes.length } }];"
       },
-      "id": "1907190b-b30a-4e7e-bb8e-4077d0eccb22",
+      "id": "54f7d2f0-5135-4515-adb6-00f60f54050e",
       "name": "Normalizar clientes",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -50,7 +50,7 @@
           }
         }
       },
-      "id": "00930968-7d56-411f-a939-8eaf4b9ade0c",
+      "id": "5636d1c2-dee1-494b-8fe8-e38324f66d80",
       "name": "Buscar investimentos (CSV)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -63,7 +63,7 @@
       "parameters": {
         "jsCode": "// Le o CSV de investimentos e cruza com os clientes, filtrando pelo saldo.\nconst csv = $json.csv ?? '';\nconst linhas = csv.trim().split(/\\r?\\n/);\nif (linhas.length < 2) throw new Error('CSV de investimentos vazio ou sem linhas de dados.');\n\nconst cabecalho = linhas.shift().split(',').map((h) => h.trim());\nconst produtos = linhas\n  .filter((l) => l.trim() !== '')\n  .map((linha) => {\n    const campos = linha.split(',').map((v) => v.trim());\n    const p = {};\n    cabecalho.forEach((h, i) => { p[h] = campos[i]; });\n    p.minimo = Number.parseFloat(p.minimo);\n    return p;\n  });\n\nconst { clientes, usar_ia, modo, email_demo } = $('Normalizar clientes').first().json;\n\nreturn clientes.map((cliente) => {\n  const doPerfil = produtos.filter((p) => p.perfil === cliente.perfil);\n  if (doPerfil.length === 0) {\n    throw new Error(`Perfil sem produtos no CSV: ${cliente.perfil}`);\n  }\n\n  // O enunciado pede o cruzamento por perfil, mas o CSV tem a coluna 'minimo'.\n  // Sem este filtro recomendamos a um cliente com R$ 500 um produto de minimo\n  // R$ 1.000, o que e uma recomendacao que ele nao consegue seguir.\n  const acessiveis = doPerfil\n    .filter((p) => cliente.saldo >= p.minimo)\n    .sort((a, b) => (b.minimo - a.minimo) || a.produto.localeCompare(b.produto));\n  const excluidos = doPerfil.filter((p) => cliente.saldo < p.minimo);\n\n  const escolhido = acessiveis[0] ?? null;\n\n  return {\n    json: {\n      nome: cliente.nome,\n      email: cliente.email,\n      perfil: cliente.perfil,\n      saldo: cliente.saldo,\n      saldo_texto: cliente.saldo_texto,\n      usar_ia,\n      modo,\n      email_demo,\n      produto_recomendado: escolhido ? escolhido.produto : null,\n      rentabilidade: escolhido ? escolhido.rentabilidade : null,\n      minimo: escolhido ? escolhido.minimo : null,\n      alternativas: acessiveis.slice(1).map((p) => p.produto),\n      excluidos_por_saldo: excluidos.map((p) => `${p.produto} (minimo ${p.minimo})`),\n      sem_opcao: escolhido === null,\n    },\n  };\n});"
       },
-      "id": "7554e10f-31ea-4302-8470-b3841b291a44",
+      "id": "9c17151a-ded3-4acf-8911-c2c8f3aaaebb",
       "name": "Cruzar e recomendar",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -76,7 +76,7 @@
       "parameters": {
         "jsCode": "// Primeira camada da validacao: formato e dominio. A segunda camada (MX) e um\n// pedido DNS, feito no no seguinte.\nconst DOMINIOS_DE_EXEMPLO = [\n  'email.com', 'example.com', 'example.org', 'example.net',\n  'test.com', 'teste.com', 'mailinator.com', 'localhost',\n];\n\n// Deliberadamente conservador: um @ , um dominio com pelo menos um ponto, sem espacos.\nconst FORMATO = /^[^\\s@]+@[^\\s@.]+(\\.[^\\s@.]+)+$/;\n\nreturn $input.all().map((item) => {\n  const c = item.json;\n  const email = String(c.email ?? '').trim().toLowerCase();\n  const dominio = email.includes('@') ? email.split('@').pop() : '';\n\n  let erro = null;\n  if (email === '') {\n    erro = 'email ausente';\n  } else if (!FORMATO.test(email)) {\n    erro = `formato invalido: ${email}`;\n  } else if (c.modo === 'producao' && DOMINIOS_DE_EXEMPLO.includes(dominio)) {\n    // 'ana@email.com' e sintaticamente valido e email.com tem MX real, portanto\n    // nenhuma verificacao tecnica o travaria. O que o trava e esta lista: sao\n    // dominios de dados ficticios, e enviar para eles alcanca pessoas reais que\n    // nao pediram nada. Num uso a serio, retira-se o dominio desta lista.\n    erro = `dominio de exemplo, nao autorizado para envio em producao: ${dominio}`;\n  }\n\n  return { json: { ...c, email_normalizado: email, dominio, erro_validacao: erro } };\n});"
       },
-      "id": "479adf8f-1b62-4899-82cd-4ecaef29d8fe",
+      "id": "10c9e6c6-a3ac-4e75-bdf4-e30a6e2f2824",
       "name": "Validar formato e domínio",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -99,7 +99,7 @@
         },
         "options": {}
       },
-      "id": "36940b43-ec97-4031-b2a0-c9a17fa52b5c",
+      "id": "bc7e3b29-7366-4d4c-989c-eee92ecf5dcc",
       "name": "Verificar MX do domínio",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -114,7 +114,7 @@
       "parameters": {
         "jsCode": "// Junta o veredicto do formato com a resposta do DNS. O no de HTTP devolve apenas\n// o corpo da resposta, por isso o cliente e recuperado pelo indice do item.\nconst base = $('Validar formato e domínio').all();\n\nreturn $input.all().map((resposta, i) => {\n  const c = base[i].json;\n  let erro = c.erro_validacao;\n\n  if (erro === null) {\n    // O Cloudflare responde com content-type 'application/dns-json', que o n8n nao\n    // reconhece como JSON: o corpo chega como texto no campo 'data'. Aceitar as duas\n    // formas evita depender desse detalhe do no de HTTP.\n    let dns = resposta.json ?? {};\n    if (typeof dns.data === 'string') {\n      try {\n        dns = JSON.parse(dns.data);\n      } catch (e) {\n        dns = {};\n      }\n    }\n    // type 15 = MX. Status 0 = NOERROR.\n    const temMx = dns.Status === 0\n      && Array.isArray(dns.Answer)\n      && dns.Answer.some((r) => r.type === 15);\n    if (!temMx) {\n      erro = `o dominio nao tem servidor de correio (sem registo MX): ${c.dominio}`;\n    }\n  }\n\n  const valido = erro === null;\n  const { erro_validacao, ...resto } = c;\n\n  return {\n    json: {\n      ...resto,\n      email_valido: valido,\n      erro_validacao: erro,\n      // O email do cliente nunca e alterado nos dados. O que muda e para onde o\n      // envio vai, e isso so se decide aqui.\n      destinatario_efetivo: valido ? (c.modo === 'demo' ? c.email_demo : c.email_normalizado) : null,\n    },\n  };\n});"
       },
-      "id": "68f632be-4269-41d6-b6e2-8b32d0318ae8",
+      "id": "cc752801-44fd-40a5-9dd4-81bfae1fdc2c",
       "name": "Consolidar validação",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -134,7 +134,7 @@
           },
           "conditions": [
             {
-              "id": "edd2fba3-5680-4458-8c12-cde8e5cff7c7",
+              "id": "f13c0888-00a8-4efb-8e20-afb2a7b5bbcf",
               "leftValue": "={{ $json.email_valido }}",
               "rightValue": "",
               "operator": {
@@ -148,7 +148,7 @@
         },
         "options": {}
       },
-      "id": "7b63cc6b-821a-4b56-b09a-e4b891596e55",
+      "id": "8213cfb8-49ce-45b9-bb43-a87bf501efe3",
       "name": "Email válido?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
@@ -161,7 +161,7 @@
       "parameters": {
         "jsCode": "// Mensagem estatica por perfil (entregavel do MVP). Fica calculada para todos os\n// itens mesmo quando o pedido vai pela IA, para servir de fallback se o LLM falhar.\nconst textos = {\n  Conservador: {\n    abertura: 'priorizamos a segurança do seu capital',\n    porque: 'privilegia previsibilidade e liquidez, com oscilação baixa',\n  },\n  Moderado: {\n    abertura: 'buscamos um equilíbrio entre segurança e crescimento',\n    porque: 'combina a estabilidade da renda fixa com alguma exposição ao crescimento',\n  },\n  Arrojado: {\n    abertura: 'selecionamos uma opção alinhada ao seu apetite por risco',\n    porque: 'tem maior potencial de retorno, aceitando oscilações no caminho',\n  },\n};\n\nconst emReais = (valor) => 'R$ ' + Number(valor).toLocaleString('pt-BR');\n\nreturn $input.all().map((item) => {\n  const c = item.json;\n  const t = textos[c.perfil] ?? { abertura: 'analisamos o seu perfil', porque: 'é adequado ao seu perfil' };\n  const primeiroNome = c.nome.split(' ')[0];\n\n  let mensagem;\n  if (c.sem_opcao) {\n    mensagem = `Olá ${primeiroNome}, com o saldo atual de ${c.saldo_texto} ainda não há no nosso catálogo uma opção do perfil ${c.perfil} que você possa contratar. Vamos falar com você para encontrar o primeiro passo.`;\n  } else {\n    const alternativas = c.alternativas.length > 0\n      ? ` Como alternativa, você também tem ${c.alternativas.join(' e ')}.`\n      : '';\n    mensagem = `Olá ${primeiroNome}, ${t.abertura}. Com saldo de ${c.saldo_texto} e perfil ${c.perfil}, nossa sugestão é ${c.produto_recomendado}, com rentabilidade de ${c.rentabilidade}, a partir de ${emReais(c.minimo)}. Escolhemos essa opção porque ${t.porque}.${alternativas} Rentabilidade passada não garante rentabilidade futura.`;\n  }\n\n  return { json: { ...c, mensagem_template: mensagem } };\n});"
       },
-      "id": "c85c026c-0b9f-4da9-a6b0-8867a7371cee",
+      "id": "ab304305-d7d0-4435-873a-ad138508e144",
       "name": "Mensagem por template",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -181,7 +181,7 @@
           },
           "conditions": [
             {
-              "id": "2ab548d0-0cda-4ca5-892f-496e2803171a",
+              "id": "30660bfd-ef8e-4a3b-ae60-52625126834f",
               "leftValue": "={{ $json.usar_ia }}",
               "rightValue": "",
               "operator": {
@@ -195,7 +195,7 @@
         },
         "options": {}
       },
-      "id": "43c9ae72-aec5-4f65-bf16-be517afbe580",
+      "id": "135d5e79-1075-4a90-bd92-20673d9c2c97",
       "name": "Usar IA?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
@@ -209,7 +209,7 @@
         "batchSize": 1,
         "options": {}
       },
-      "id": "53462bf3-526a-4ca7-8c9a-e2e3551c5e54",
+      "id": "d8c41d24-0a23-4a1e-8b99-b5e52981d789",
       "name": "Dividir em lotes",
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
@@ -227,7 +227,7 @@
           "systemMessage": "És assistente de investimentos de uma corretora brasileira e escreves a mensagem que o cliente vai receber.\n\nRegras:\n- Escreve em português do Brasil, em 3 a 4 frases, tom cordial e direto.\n- Trata o cliente pelo primeiro nome.\n- Recomenda exclusivamente o produto indicado. Não inventes produtos, taxas, prazos nem valores que não estejam nos dados recebidos.\n- Explica em uma frase por que esse produto se ajusta ao perfil e ao saldo do cliente.\n- Não prometas retorno garantido e termina lembrando que rentabilidade passada não garante rentabilidade futura.\n- Não menciones produtos que o cliente não pode subscrever, nem o facto de existirem.\n- Devolve apenas o texto da mensagem, sem saudação de assunto, sem assinatura e sem markdown."
         }
       },
-      "id": "a667257f-6eff-4ce9-8fbc-df77b82f57aa",
+      "id": "19d72b09-6d80-4c3e-8f60-6a599e8db0b3",
       "name": "Gerar mensagem com IA",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3,
@@ -250,7 +250,7 @@
           "maxTokens": 400
         }
       },
-      "id": "3401e71f-2cc6-498f-81a7-c8dd7ef95b02",
+      "id": "5e649a1b-0256-463e-b1c0-9be9f4352dff",
       "name": "OpenRouter / Nemotron (modelo principal)",
       "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
       "typeVersion": 1,
@@ -273,7 +273,7 @@
           "maxOutputTokens": 400
         }
       },
-      "id": "6b32c561-240c-4f32-a60c-822dcee4b45e",
+      "id": "2b14c6b9-0970-4a51-a57f-47f4058193ee",
       "name": "Gemini (modelo de reserva)",
       "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
       "typeVersion": 1,
@@ -292,7 +292,7 @@
       "parameters": {
         "amount": 2
       },
-      "id": "e2d64b1c-a755-4ab7-bdaf-950dad3ca04f",
+      "id": "ea808ab8-4cd4-40a1-8255-1ddb8be03d9b",
       "name": "Aguardar (limite de taxa)",
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
@@ -305,7 +305,7 @@
       "parameters": {
         "jsCode": "// O no do agente devolve apenas 'output', por isso recuperamos o cliente\n// correspondente pelo indice do item, que o agente preserva.\nconst base = $('Mensagem por template').all();\n\nreturn $input.all().map((item, i) => {\n  const original = base[i].json;\n  const { mensagem_template, usar_ia, ...resto } = original;\n  const texto = String(item.json.output ?? '').trim();\n  const falhou = texto === '';\n\n  return {\n    json: {\n      ...resto,\n      mensagem: falhou ? mensagem_template : texto,\n      origem: falhou ? 'template (fallback: a IA não respondeu)' : 'ia',\n    },\n  };\n});"
       },
-      "id": "197c0002-f65c-4b03-a3bd-d163ff3a2108",
+      "id": "4a7529f3-acfe-477d-a6eb-57441ea61f77",
       "name": "Finalizar (IA)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -318,7 +318,7 @@
       "parameters": {
         "jsCode": "return $input.all().map((item) => {\n  const { mensagem_template, usar_ia, ...resto } = item.json;\n  return { json: { ...resto, mensagem: mensagem_template, origem: 'template' } };\n});"
       },
-      "id": "925e85ab-39cc-462b-88a1-7e9027a32fd2",
+      "id": "1241ec08-ccb8-44c9-9072-d8dbe037edac",
       "name": "Finalizar (template)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -333,7 +333,7 @@
         "numberInputs": 2,
         "options": {}
       },
-      "id": "79531c09-89b6-4c69-a614-da51e8cdd901",
+      "id": "06692c14-8151-4d80-b63c-1b02d77b9f3a",
       "name": "Juntar resultados",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
@@ -347,7 +347,7 @@
         "respondWith": "allIncomingItems",
         "options": {}
       },
-      "id": "e54168a0-679d-4028-b30f-ca392f15cf16",
+      "id": "af561acf-dfee-4c3e-8498-7cf34724dc44",
       "name": "Responder ao RPA",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
@@ -367,7 +367,7 @@
           },
           "conditions": [
             {
-              "id": "79d34f1e-be81-422d-9720-84900e9198a9",
+              "id": "951265dd-4527-4da6-bf2d-3ae1f4f3fc57",
               "leftValue": "={{ $json.email_valido }}",
               "rightValue": "",
               "operator": {
@@ -381,7 +381,7 @@
         },
         "options": {}
       },
-      "id": "439e86b5-a1f8-4105-9162-9dd4e33323c3",
+      "id": "c2e20aa2-74e0-4f92-9b73-7e2e75f3d979",
       "name": "Rotear entrega",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
@@ -394,19 +394,19 @@
       "parameters": {
         "sendTo": "={{ $json.destinatario_efetivo }}",
         "subject": "={{ $json.modo === 'demo' ? '[demo] ' : '' }}Sua recomendação de investimento, {{ $json.nome.split(' ')[0] }}",
-        "emailType": "text",
-        "message": "={{ $json.modo === 'demo' ? '[DEMO] Destinatário original: ' + $json.nome + ' <' + $json.email + '>\\n\\n' : '' }}{{ $json.mensagem }}",
+        "emailType": "html",
+        "message": "={{ $json.email_html }}",
         "options": {
           "appendAttribution": false
         }
       },
-      "id": "a2826138-8285-4ac3-9dbe-54a57a0f5a3c",
+      "id": "36da86a7-14f6-43ed-ba42-6b9bad4045e5",
       "name": "Enviar email (Gmail)",
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.2,
       "position": [
-        2520,
-        140
+        2740,
+        60
       ],
       "credentials": {
         "gmailOAuth2": {
@@ -417,9 +417,22 @@
     },
     {
       "parameters": {
+        "jsCode": "// Monta o corpo HTML do email. Fica num no de Code em vez de numa expressao gigante\n// dentro do no do Gmail: assim o HTML e legivel, versionavel e testavel a parte.\n//\n// Layout em tabelas e estilos em linha de proposito. Os clientes de email descartam\n// <style> no <head> e nao suportam flexbox nem grid: o que funciona em todos e o que\n// funcionava em 2005.\n\nconst escapar = (valor) => String(valor ?? '')\n  .replace(/&/g, '&amp;')\n  .replace(/</g, '&lt;')\n  .replace(/>/g, '&gt;')\n  .replace(/\"/g, '&quot;');\n\nconst emReais = (valor) => 'R$ ' + Number(valor).toLocaleString('pt-BR');\n\nreturn $input.all().map((item) => {\n  const c = item.json;\n  const primeiroNome = escapar(c.nome.split(' ')[0]);\n\n  // A mensagem vem do modelo ou do template, sempre como texto. Qualquer coisa que\n  // venha de um LLM e tratada como dados, nunca como marcacao: daqui para a frente\n  // vai escapada.\n  const paragrafos = String(c.mensagem ?? '')\n    .split(/\\n{2,}/)\n    .map((bloco) => bloco.trim())\n    .filter((bloco) => bloco !== '')\n    .map((bloco) => `<p style=\"margin:0 0 16px;font-size:15px;line-height:1.65;color:#2b2f36;\">`\n      + escapar(bloco).replace(/\\n/g, '<br>')\n      + `</p>`)\n    .join('');\n\n  const faixaDemo = c.modo === 'demo'\n    ? `<tr><td style=\"background:#fff4d6;border-bottom:1px solid #f0dca8;padding:12px 28px;font-size:12px;color:#6b5420;\">`\n      + `<strong>Modo demonstracao.</strong> Destinatario original: `\n      + `${escapar(c.nome)} &lt;${escapar(c.email)}&gt;`\n      + `</td></tr>`\n    : '';\n\n  const linha = (rotulo, valor) => `<tr>`\n    + `<td style=\"padding:9px 0;font-size:13px;color:#6a7280;border-bottom:1px solid #eceef1;width:42%;\">${rotulo}</td>`\n    + `<td style=\"padding:9px 0;font-size:13px;color:#2b2f36;border-bottom:1px solid #eceef1;font-weight:600;\">${valor}</td>`\n    + `</tr>`;\n\n  const linhaAlternativas = (c.alternativas && c.alternativas.length > 0)\n    ? linha('Tambem acessiveis ao seu saldo', escapar(c.alternativas.join(', ')))\n    : '';\n\n  const html = `<!doctype html>\n<html lang=\"pt-br\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>Sua recomendacao de investimento</title>\n</head>\n<body style=\"margin:0;padding:0;background:#f4f6f8;\">\n<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f4f6f8;padding:24px 12px;\">\n<tr><td align=\"center\">\n<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:600px;width:100%;background:#ffffff;border-radius:10px;overflow:hidden;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;\">\n\n${faixaDemo}\n\n<tr><td style=\"background:#1d3f6e;padding:26px 28px;\">\n<div style=\"font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:#9fc0ea;\">Assistente de investimentos</div>\n<div style=\"font-size:21px;font-weight:700;color:#ffffff;padding-top:6px;\">Sua recomendacao, ${primeiroNome}</div>\n</td></tr>\n\n<tr><td style=\"padding:28px 28px 8px;\">\n${paragrafos}\n</td></tr>\n\n<tr><td style=\"padding:0 28px 8px;\">\n<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-top:1px solid #eceef1;\">\n${linha('Perfil de investidor', escapar(c.perfil))}\n${linha('Saldo disponivel', escapar(c.saldo_texto))}\n${linha('Produto recomendado', escapar(c.produto_recomendado))}\n${linha('Rentabilidade', escapar(c.rentabilidade))}\n${linha('Aplicacao minima', emReais(c.minimo))}\n${linhaAlternativas}\n</table>\n</td></tr>\n\n<tr><td style=\"padding:20px 28px 28px;\">\n<div style=\"background:#f7f9fb;border-left:3px solid #c9d4e2;padding:12px 14px;font-size:12px;line-height:1.6;color:#5c6572;\">\nEsta mensagem foi gerada automaticamente a partir do seu perfil e do seu saldo.\nRentabilidade passada nao garante rentabilidade futura. Avalie as condicoes do\nproduto antes de investir.\n</div>\n</td></tr>\n\n</table>\n</td></tr>\n</table>\n</body>\n</html>`;\n\n  return { json: { ...c, email_html: html } };\n});"
+      },
+      "id": "2a112dd9-4bd4-4785-a92d-549b515f5da0",
+      "name": "Montar email HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2520,
+        60
+      ]
+    },
+    {
+      "parameters": {
         "jsCode": "// Um alerta com a lista toda, em vez de um ping por cliente. Dez notificacoes\n// seguidas no telefone sao ruido; uma com dez linhas e informacao.\nconst falhas = $input.all().map((i) => i.json);\nconst linhas = falhas\n  .map((f) => `- ${f.nome} <${f.email}>\\n  ${f.erro_validacao}`)\n  .join('\\n');\n\nconst texto = [\n  `Assistente de investimentos: ${falhas.length} email(s) nao enviado(s)`,\n  ``,\n  `Modo: ${falhas[0]?.modo ?? 'desconhecido'}`,\n  `Momento: ${new Date().toISOString()}`,\n  ``,\n  linhas,\n].join('\\n');\n\nreturn [{ json: { texto, total: falhas.length } }];"
       },
-      "id": "c97479bd-a221-461e-a234-3f13b2b315f0",
+      "id": "c56c8883-ef2e-44ef-80e2-125f3008e3d5",
       "name": "Agrupar erros",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -436,7 +449,7 @@
           "appendAttribution": false
         }
       },
-      "id": "415dcac0-cf95-4c4e-b28e-d1a4255ab4e5",
+      "id": "1b799a38-87f2-4935-aa1a-66bb48b50cfd",
       "name": "Alertar erro no Telegram",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
@@ -687,7 +700,7 @@
       "main": [
         [
           {
-            "node": "Enviar email (Gmail)",
+            "node": "Montar email HTML",
             "type": "main",
             "index": 0
           }
@@ -695,6 +708,17 @@
         [
           {
             "node": "Agrupar erros",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar email HTML": {
+      "main": [
+        [
+          {
+            "node": "Enviar email (Gmail)",
             "type": "main",
             "index": 0
           }

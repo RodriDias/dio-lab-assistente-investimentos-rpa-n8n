@@ -10,7 +10,7 @@ Resolução do desafio da DIO. O enunciado original está [mais abaixo](#criando
 | RPA ligado ao webhook | [`rpa/extrair_clientes.py`](rpa/extrair_clientes.py) e o notebook original |
 | Mensagens estáticas (MVP) | ramo `Finalizar (template)` do workflow |
 | Mensagens por LLM | ramo do agente, com dois modelos ligados |
-| Envio por email, com validação | `Validar formato e domínio` → `Email válido?` → Gmail |
+| Envio por email HTML, com validação | `Validar formato e domínio` → `Email válido?` → `Montar email HTML` → Gmail |
 | Alerta de erro no Telegram | `Agrupar erros` → `Alertar erro no Telegram` |
 | Decisões técnicas | [`DECISOES.md`](DECISOES.md) |
 
@@ -39,10 +39,10 @@ página HTML  ──scraping──>  RPA (Python)  ──POST──>  Webhook do
                                         ┌──────────┴──────────┐
                                      válido               inválido
                                         │                     │
-                                 enviar Gmail        1 alerta no Telegram
+                              montar HTML + Gmail    1 alerta no Telegram
 ```
 
-Os vinte e três nós, pela ordem de execução:
+Os vinte e quatro nós, pela ordem de execução:
 
 1. `Webhook: clientes do RPA` — POST autenticado por header, responde pelo nó final
 2. `Normalizar clientes` — valida o corpo, converte o saldo para número e fixa o modo
@@ -58,7 +58,7 @@ Os vinte e três nós, pela ordem de execução:
 12. `Juntar resultados` — junta válidos e inválidos para a resposta ser completa
 13. `Responder ao RPA` — devolve o estado de cada cliente ao script
 14. `Rotear entrega` — depois da resposta, separa envios de alertas
-15. `Enviar email (Gmail)` — destinatário conforme o modo
+15. `Montar email HTML` → `Enviar email (Gmail)` — corpo em HTML, destinatário conforme o modo
 16. `Agrupar erros` → `Alertar erro no Telegram` — um alerta com todas as falhas
 
 ## Modo demo e modo produção

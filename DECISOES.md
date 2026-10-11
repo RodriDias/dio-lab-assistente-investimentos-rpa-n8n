@@ -187,6 +187,27 @@ Um detalhe que me custou uma depuração: como os nós de envio correm **depois*
 a execução só é gravada quando eles terminam. Consultar a API logo após receber a resposta
 devolve a execução anterior, não esta.
 
+## 14. O email é HTML, e o texto do modelo é tratado como dados
+
+O corpo do email é montado num nó de Code (`Montar email HTML`) e não numa expressão dentro
+do nó do Gmail. Uma expressão com um documento HTML inteiro fica ilegível no editor, não se
+consegue testar fora do n8n e qualquer erro de sintaxe só aparece em execução. Num nó de
+Code o HTML é texto normal, versionado e verificável.
+
+O layout é feito com tabelas e estilos em linha, que parece datado e é o que funciona: os
+clientes de email descartam `<style>` no `<head>` e não suportam flexbox nem grid.
+
+A parte que me pareceu mais importante: **tudo o que vem do modelo de linguagem é escapado
+antes de entrar no HTML**. O nome, o produto, a mensagem gerada — passam todos por uma
+função que converte `<`, `>`, `&` e `"` nas entidades respetivas. Um LLM produz texto, e
+texto que vai para dentro de marcação é uma entrada não confiável como qualquer outra. Sem
+isto, um modelo que devolvesse `<script>` ou simplesmente uma aspa a mais produzia um email
+quebrado, ou pior. Testei com uma mensagem hostil propositada: o `<script>` sai como texto
+visível, não como marcação.
+
+Não há versão em texto simples. O nó do Gmail do n8n envia um tipo ou o outro, não uma
+mensagem multipart com as duas alternativas. É uma limitação do nó, não uma escolha.
+
 ## Limitações que ficam conhecidas
 
 - **O scraping depende da estrutura da página.** O seletor é `#clientes tbody tr` e as
