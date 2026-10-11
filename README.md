@@ -122,6 +122,47 @@ As dez recomendações, com os três casos em que o filtro por saldo muda a resp
 
 Por que isto importa, e as outras decisões do caminho: [`DECISOES.md`](DECISOES.md).
 
+## Demonstração
+
+### O workflow
+
+![Canvas do n8n com os 24 nós do workflow](prints/01-n8n-canvas.png)
+
+Os 24 nós, da receção do webhook até ao envio do email e ao alerta no Telegram.
+
+### Uma execução completa
+
+![Execução bem-sucedida com o output do nó de cruzamento](prints/02-execucao.png)
+
+Execução em modo demo, concluída em 7,2 segundos. Em baixo, o output do
+`Cruzar e recomendar`: os 10 clientes já com produto recomendado, rentabilidade,
+aplicação mínima e alternativas.
+
+### O filtro por saldo e a validação do email
+
+![Output do nó Consolidar validação](prints/03-cruzamento-e-validacao.png)
+
+A coluna `excluidos_por_saldo` mostra a decisão que o cruzamento por perfil sozinho não
+tomaria: o Bruno perde o Fundo Multimercado (mínimo R$ 5.000) e o Daniel perde o CDB
+Liquidez Diária (mínimo R$ 1.000), porque o saldo não lá chega. À direita,
+`email_valido` e `erro_validacao`.
+
+### O ramo de erro
+
+![Execução em modo produção com o alerta no Telegram](prints/04-ramo-de-erro.png)
+
+A mesma corrida em modo produção. A validação rejeita os dez clientes — os endereços são
+de um domínio de dados fictícios — e o fluxo segue para `Agrupar erros` e
+`Alertar erro no Telegram`. O `Enviar email (Gmail)` não chega a correr, e
+`destinatario_efetivo` fica a `null`.
+
+### O email recebido
+
+![Email HTML recebido no Gmail](prints/05-email-html.png)
+
+O email montado pelo nó `Montar email HTML`, com a faixa que identifica o modo
+demonstração e o destinatário original.
+
 ---
 
 # Criando um Assistente de Investimentos com RPA e IA Generativa
