@@ -156,6 +156,13 @@ de um domínio de dados fictícios — e o fluxo segue para `Agrupar erros` e
 `Alertar erro no Telegram`. O `Enviar email (Gmail)` não chega a correr, e
 `destinatario_efetivo` fica a `null`.
 
+### O alerta no Telegram
+
+![Alerta agregado no Telegram com os dez clientes bloqueados](prints/06-telegram.png)
+
+O alerta que a corrida em modo produção gerou: um único aviso com os dez clientes e o
+motivo de cada um, em vez de dez notificações seguidas.
+
 ### O email recebido
 
 ![Email HTML recebido no Gmail](prints/05-email-html.png)
