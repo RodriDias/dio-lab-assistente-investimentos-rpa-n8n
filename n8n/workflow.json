@@ -1,0 +1,422 @@
+{
+  "name": "DIO - Assistente de Investimentos (RPA + IA)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "dio-investimentos",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "2ea0fa7e-b0a2-4647-a6da-fca25d63106f",
+      "name": "Webhook: clientes do RPA",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -460,
+        300
+      ],
+      "webhookId": "f0046189-1f0e-4123-82b1-02e8555adf86",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "O3VnEbQ814PPVaIH",
+          "name": "DIO RPA Investimentos - header token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Valida o corpo do pedido e garante que o saldo e numero antes de qualquer comparacao.\nconst entrada = $input.first().json;\nconst corpo = entrada.body ?? entrada;\nconst brutos = corpo.clientes;\n\nif (!Array.isArray(brutos) || brutos.length === 0) {\n  throw new Error('Corpo do pedido sem a lista \"clientes\".');\n}\n\n// 'R$ 12.500,00' -> 12500. Em pt-BR o ponto e milhar e a virgula e decimal, ao\n// contrario do que Number() espera: sem isto, 'R$ 850,00' viraria 85000 e\n// 'R$ 12.500,00' viraria 12.5, e a comparacao com o minimo do produto fica errada.\nfunction saldoParaNumero(valor) {\n  if (typeof valor === 'number' && Number.isFinite(valor)) return valor;\n  const limpo = String(valor ?? '').replace(/[^\\d,.]/g, '').replace(/\\./g, '').replace(',', '.');\n  const numero = Number.parseFloat(limpo);\n  if (!Number.isFinite(numero)) throw new Error(`Saldo ilegivel: ${JSON.stringify(valor)}`);\n  return numero;\n}\n\nconst clientes = brutos.map((c) => ({\n  nome: String(c.nome ?? '').trim(),\n  email: String(c.email ?? '').trim(),\n  perfil: String(c.perfil ?? '').trim(),\n  saldo_texto: c.saldo_texto ?? String(c.saldo ?? ''),\n  saldo: saldoParaNumero(c.saldo ?? c.saldo_texto),\n}));\n\nconst incompletos = clientes.filter((c) => !c.nome || !c.perfil);\nif (incompletos.length > 0) {\n  throw new Error(`${incompletos.length} cliente(s) sem nome ou sem perfil.`);\n}\n\n// Um unico item ate ao cruzamento: assim o CSV e buscado uma vez, nao uma por cliente.\nreturn [{ json: { clientes, usar_ia: corpo.usar_ia === true, recebidos: clientes.length } }];"
+      },
+      "id": "6ac3bc5a-a788-4cf3-8d37-36a039cdd3e2",
+      "name": "Normalizar clientes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://digitalinnovationone.github.io/dio-lab-assistente-investimentos-rpa-n8n/data.csv",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "outputPropertyName": "csv"
+            }
+          }
+        }
+      },
+      "id": "b3793ca8-5364-4710-833a-a16d89d28897",
+      "name": "Buscar investimentos (CSV)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -20,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Le o CSV de investimentos e cruza com os clientes, filtrando pelo saldo.\nconst csv = $json.csv ?? '';\nconst linhas = csv.trim().split(/\\r?\\n/);\nif (linhas.length < 2) throw new Error('CSV de investimentos vazio ou sem linhas de dados.');\n\nconst cabecalho = linhas.shift().split(',').map((h) => h.trim());\nconst produtos = linhas\n  .filter((l) => l.trim() !== '')\n  .map((linha) => {\n    const campos = linha.split(',').map((v) => v.trim());\n    const p = {};\n    cabecalho.forEach((h, i) => { p[h] = campos[i]; });\n    p.minimo = Number.parseFloat(p.minimo);\n    return p;\n  });\n\nconst { clientes, usar_ia } = $('Normalizar clientes').first().json;\n\nreturn clientes.map((cliente) => {\n  const doPerfil = produtos.filter((p) => p.perfil === cliente.perfil);\n  if (doPerfil.length === 0) {\n    throw new Error(`Perfil sem produtos no CSV: ${cliente.perfil}`);\n  }\n\n  // O enunciado pede o cruzamento por perfil, mas o CSV tem a coluna 'minimo'.\n  // Sem este filtro recomendamos a um cliente com R$ 500 um produto de minimo\n  // R$ 1.000, o que e uma recomendacao que ele nao consegue seguir.\n  const acessiveis = doPerfil\n    .filter((p) => cliente.saldo >= p.minimo)\n    .sort((a, b) => (b.minimo - a.minimo) || a.produto.localeCompare(b.produto));\n  const excluidos = doPerfil.filter((p) => cliente.saldo < p.minimo);\n\n  const escolhido = acessiveis[0] ?? null;\n\n  return {\n    json: {\n      nome: cliente.nome,\n      email: cliente.email,\n      perfil: cliente.perfil,\n      saldo: cliente.saldo,\n      saldo_texto: cliente.saldo_texto,\n      usar_ia,\n      produto_recomendado: escolhido ? escolhido.produto : null,\n      rentabilidade: escolhido ? escolhido.rentabilidade : null,\n      minimo: escolhido ? escolhido.minimo : null,\n      alternativas: acessiveis.slice(1).map((p) => p.produto),\n      excluidos_por_saldo: excluidos.map((p) => `${p.produto} (minimo ${p.minimo})`),\n      sem_opcao: escolhido === null,\n    },\n  };\n});"
+      },
+      "id": "28888af3-47a9-4b98-8cdb-ede54015dba1",
+      "name": "Cruzar e recomendar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mensagem estatica por perfil (entregavel do MVP). Fica calculada para todos os\n// itens mesmo quando o pedido vai pela IA, para servir de fallback se o LLM falhar.\nconst textos = {\n  Conservador: {\n    abertura: 'priorizamos a segurança do seu capital',\n    porque: 'privilegia previsibilidade e liquidez, com oscilação baixa',\n  },\n  Moderado: {\n    abertura: 'buscamos um equilíbrio entre segurança e crescimento',\n    porque: 'combina a estabilidade da renda fixa com alguma exposição ao crescimento',\n  },\n  Arrojado: {\n    abertura: 'selecionamos uma opção alinhada ao seu apetite por risco',\n    porque: 'tem maior potencial de retorno, aceitando oscilações no caminho',\n  },\n};\n\nconst emReais = (valor) => 'R$ ' + Number(valor).toLocaleString('pt-BR');\n\nreturn $input.all().map((item) => {\n  const c = item.json;\n  const t = textos[c.perfil] ?? { abertura: 'analisamos o seu perfil', porque: 'é adequado ao seu perfil' };\n  const primeiroNome = c.nome.split(' ')[0];\n\n  let mensagem;\n  if (c.sem_opcao) {\n    mensagem = `Olá ${primeiroNome}, com o saldo atual de ${c.saldo_texto} ainda não há no nosso catálogo uma opção do perfil ${c.perfil} que você possa contratar. Vamos falar com você para encontrar o primeiro passo.`;\n  } else {\n    const alternativas = c.alternativas.length > 0\n      ? ` Como alternativa, você também tem ${c.alternativas.join(' e ')}.`\n      : '';\n    mensagem = `Olá ${primeiroNome}, ${t.abertura}. Com saldo de ${c.saldo_texto} e perfil ${c.perfil}, nossa sugestão é ${c.produto_recomendado}, com rentabilidade de ${c.rentabilidade}, a partir de ${emReais(c.minimo)}. Escolhemos essa opção porque ${t.porque}.${alternativas} Rentabilidade passada não garante rentabilidade futura.`;\n  }\n\n  return { json: { ...c, mensagem_template: mensagem } };\n});"
+      },
+      "id": "e3f9f13f-7822-45ca-a277-204bb5ba242d",
+      "name": "Mensagem por template",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "934a40ef-8903-4d0e-89ef-589d89b5e965",
+              "leftValue": "={{ $json.usar_ia }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "7e1fd694-5062-44d5-bf2d-47808d3b9906",
+      "name": "Usar IA?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Cliente: {{ $json.nome }}\nPerfil de investidor: {{ $json.perfil }}\nSaldo disponível: {{ $json.saldo_texto }}\nProduto recomendado: {{ $json.produto_recomendado }}\nRentabilidade do produto: {{ $json.rentabilidade }}\nAplicação mínima: R$ {{ $json.minimo }}\nOutras opções acessíveis a este saldo: {{ $json.alternativas.join(', ') || 'nenhuma' }}\n\nEscreve a mensagem para este cliente.",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "És assistente de investimentos de uma corretora brasileira e escreves a mensagem que o cliente vai receber.\n\nRegras:\n- Escreve em português do Brasil, em 3 a 4 frases, tom cordial e direto.\n- Trata o cliente pelo primeiro nome.\n- Recomenda exclusivamente o produto indicado. Não inventes produtos, taxas, prazos nem valores que não estejam nos dados recebidos.\n- Explica em uma frase por que esse produto se ajusta ao perfil e ao saldo do cliente.\n- Não prometas retorno garantido e termina lembrando que rentabilidade passada não garante rentabilidade futura.\n- Não menciones produtos que o cliente não pode subscrever, nem o facto de existirem.\n- Devolve apenas o texto da mensagem, sem saudação de assunto, sem assinatura e sem markdown."
+        }
+      },
+      "id": "3bfba841-195f-4601-bc68-32687bcaf334",
+      "name": "Gerar mensagem com IA",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        1120,
+        100
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash",
+        "options": {
+          "temperature": 0.7,
+          "maxOutputTokens": 400
+        }
+      },
+      "id": "7722e8f5-ef4d-4912-b0aa-83b9fee9a0ee",
+      "name": "Gemini (modelo de reserva)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        1140,
+        300
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "u1Ihl3krfb4EyPlI",
+          "name": "RODRI Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "google/gemma-4-31b-it:free",
+        "options": {
+          "timeout": 15000,
+          "maxRetries": 0,
+          "temperature": 0.7,
+          "maxTokens": 400
+        }
+      },
+      "id": "3ce0af31-bd3d-45d9-9f1d-771a36defb09",
+      "name": "OpenRouter / Nemotron (modelo principal)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        1300,
+        320
+      ],
+      "credentials": {
+        "openRouterApi": {
+          "id": "Amhlx8PUOA2FFLC5",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// O no do agente devolve apenas 'output', por isso recuperamos o cliente\n// correspondente pelo indice do item, que o agente preserva.\nconst base = $('Mensagem por template').all();\n\nreturn $input.all().map((item, i) => {\n  const original = base[i].json;\n  const { mensagem_template, usar_ia, ...resto } = original;\n  const texto = String(item.json.output ?? '').trim();\n  const falhou = texto === '';\n\n  return {\n    json: {\n      ...resto,\n      mensagem: falhou ? mensagem_template : texto,\n      origem: falhou ? 'template (fallback: a IA não respondeu)' : 'ia',\n    },\n  };\n});"
+      },
+      "id": "5a6ca94c-5889-40a0-aef8-a40a5cb90ed6",
+      "name": "Finalizar (IA)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => {\n  const { mensagem_template, usar_ia, ...resto } = item.json;\n  return { json: { ...resto, mensagem: mensagem_template, origem: 'template' } };\n});"
+      },
+      "id": "54e646c7-0bb2-4b9e-9515-e7ad30756715",
+      "name": "Finalizar (template)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "604ac462-f36e-4235-9227-07f8eb89a545",
+      "name": "Dividir em lotes",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        880,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "id": "1056e833-e615-4ac9-adbb-a651a566e498",
+      "name": "Aguardar (limite de taxa)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1340,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
+      "id": "3fe673bc-c41a-443f-849b-b21c77ce6508",
+      "name": "Responder ao RPA",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1360,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook: clientes do RPA": {
+      "main": [
+        [
+          {
+            "node": "Normalizar clientes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar clientes": {
+      "main": [
+        [
+          {
+            "node": "Buscar investimentos (CSV)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar investimentos (CSV)": {
+      "main": [
+        [
+          {
+            "node": "Cruzar e recomendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cruzar e recomendar": {
+      "main": [
+        [
+          {
+            "node": "Mensagem por template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mensagem por template": {
+      "main": [
+        [
+          {
+            "node": "Usar IA?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Usar IA?": {
+      "main": [
+        [
+          {
+            "node": "Dividir em lotes",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalizar (template)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dividir em lotes": {
+      "main": [
+        [
+          {
+            "node": "Finalizar (IA)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gerar mensagem com IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini (modelo de reserva)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Gerar mensagem com IA",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "OpenRouter / Nemotron (modelo principal)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Gerar mensagem com IA",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar mensagem com IA": {
+      "main": [
+        [
+          {
+            "node": "Aguardar (limite de taxa)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aguardar (limite de taxa)": {
+      "main": [
+        [
+          {
+            "node": "Dividir em lotes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalizar (IA)": {
+      "main": [
+        [
+          {
+            "node": "Responder ao RPA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalizar (template)": {
+      "main": [
+        [
+          {
+            "node": "Responder ao RPA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

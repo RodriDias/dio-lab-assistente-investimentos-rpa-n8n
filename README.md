@@ -1,3 +1,88 @@
+# Assistente de Investimentos com RPA e IA — minha solução
+
+Resolução do desafio da DIO. O enunciado original está [mais abaixo](#criando-um-assistente-de-investimentos-com-rpa-e-ia-generativa), sem alterações.
+
+## O que está entregue
+
+| Entregável | Onde |
+| --- | --- |
+| Workflow do n8n | [`n8n/workflow.json`](n8n/workflow.json) |
+| RPA ligado ao webhook | [`rpa/extrair_clientes.py`](rpa/extrair_clientes.py) e o notebook original |
+| Mensagens estáticas (MVP) | ramo `Finalizar (template)` do workflow |
+| Mensagens por LLM | ramo do agente, com dois modelos ligados |
+| Decisões técnicas | [`DECISOES.md`](DECISOES.md) |
+
+## Como corre
+
+```
+página HTML  ──scraping──>  RPA (Python)  ──POST──>  Webhook do n8n
+                                                         │
+                                       data.csv <──HTTP──┤
+                                                         │
+                                      cruzar perfil + filtrar por saldo
+                                                         │
+                                        ┌────────────────┴────────────────┐
+                                   usar_ia = true                   usar_ia = false
+                                        │                                │
+                              agente (2 modelos)                 template por perfil
+                                        └────────────────┬────────────────┘
+                                                   resposta ao RPA
+```
+
+Os treze nós, pela ordem de execução:
+
+1. `Webhook: clientes do RPA` — POST autenticado por header, responde pelo nó final
+2. `Normalizar clientes` — valida o corpo e converte o saldo de texto para número
+3. `Buscar investimentos (CSV)` — descarrega o `data.csv` **uma vez**
+4. `Cruzar e recomendar` — cruza por perfil e filtra pelo saldo mínimo
+5. `Mensagem por template` — gera o texto estático para todos os clientes
+6. `Usar IA?` — desvia conforme o campo `usar_ia` do pedido
+7. `Dividir em lotes` + `Aguardar (limite de taxa)` — uma chamada ao modelo por vez
+8. `Gerar mensagem com IA` — agente com modelo principal e modelo de reserva
+9. `Finalizar (IA)` / `Finalizar (template)` — normalizam a saída e marcam a origem
+10. `Responder ao RPA` — devolve as mensagens ao script
+
+## Como executar
+
+Importar `n8n/workflow.json` no n8n e criar duas coisas na instância: uma credencial
+*Header Auth* com o cabeçalho `X-RPA-Token` e um token à escolha, e a credencial do
+modelo de linguagem. Depois, na máquina que corre o RPA:
+
+```bash
+pip install requests beautifulsoup4
+
+export N8N_WEBHOOK_URL="https://SEU_N8N/webhook/dio-investimentos"
+export RPA_TOKEN="o-mesmo-token-da-credencial"
+
+python rpa/extrair_clientes.py --dry-run   # extrai e mostra, não envia
+python rpa/extrair_clientes.py             # MVP, mensagens por template
+python rpa/extrair_clientes.py --com-ia    # mensagens geradas pelo modelo
+```
+
+O token não está neste repositório de propósito: o webhook fica exposto na internet e
+quem souber o URL poderia injetar clientes inventados no fluxo.
+
+## Resultado
+
+As dez recomendações, com os três casos em que o filtro por saldo muda a resposta:
+
+| Cliente | Perfil | Saldo | Recomendado | Excluído por saldo |
+| --- | --- | --- | --- | --- |
+| Ana Silva | Conservador | R$ 12.500,00 | CDB Liquidez Diária | — |
+| Bruno Lima | Moderado | R$ 3.200,00 | CDB Prefixado | Fundo Multimercado |
+| Carla Souza | Arrojado | R$ 28.900,00 | Fundo de Ações | — |
+| Daniel Oliveira | Conservador | R$ 850,00 | Tesouro Selic | CDB Liquidez Diária |
+| Elena Rodrigues | Arrojado | R$ 45.000,00 | Fundo de Ações | — |
+| Felipe Santos | Moderado | R$ 7.800,00 | Fundo Multimercado | — |
+| Gabriela Costa | Conservador | R$ 1.500,00 | CDB Liquidez Diária | — |
+| Henrique Alves | Moderado | R$ 22.300,00 | Fundo Multimercado | — |
+| Isabela Martins | Conservador | R$ 500,00 | Tesouro Selic | CDB Liquidez Diária |
+| João Pereira | Arrojado | R$ 15.000,00 | Fundo de Ações | — |
+
+Por que isto importa, e as outras decisões do caminho: [`DECISOES.md`](DECISOES.md).
+
+---
+
 # Criando um Assistente de Investimentos com RPA e IA Generativa
 
 ## Descrição
