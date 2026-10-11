@@ -10,6 +10,8 @@ Resolução do desafio da DIO. O enunciado original está [mais abaixo](#criando
 | RPA ligado ao webhook | [`rpa/extrair_clientes.py`](rpa/extrair_clientes.py) e o notebook original |
 | Mensagens estáticas (MVP) | ramo `Finalizar (template)` do workflow |
 | Mensagens por LLM | ramo do agente, com dois modelos ligados |
+| Envio por email, com validação | `Validar formato e domínio` → `Email válido?` → Gmail |
+| Alerta de erro no Telegram | `Agrupar erros` → `Alertar erro no Telegram` |
 | Decisões técnicas | [`DECISOES.md`](DECISOES.md) |
 
 ## Como corre
@@ -21,42 +23,81 @@ página HTML  ──scraping──>  RPA (Python)  ──POST──>  Webhook do
                                                          │
                                       cruzar perfil + filtrar por saldo
                                                          │
-                                        ┌────────────────┴────────────────┐
-                                   usar_ia = true                   usar_ia = false
-                                        │                                │
-                              agente (2 modelos)                 template por perfil
-                                        └────────────────┬────────────────┘
-                                                   resposta ao RPA
+                                   validar email: formato, MX, autorização
+                                                         │
+                                        ┌────────────────┴───────────┐
+                                     válido                      inválido
+                                        │                            │
+                           ┌────────────┴────────────┐               │
+                      usar_ia = true          usar_ia = false        │
+                           │                        │                │
+                 agente (2 modelos)         template por perfil      │
+                           └────────────┬───────────┘                │
+                                        └──────────┬─────────────────┘
+                                              resposta ao RPA
+                                                   │
+                                        ┌──────────┴──────────┐
+                                     válido               inválido
+                                        │                     │
+                                 enviar Gmail        1 alerta no Telegram
 ```
 
-Os treze nós, pela ordem de execução:
+Os vinte e três nós, pela ordem de execução:
 
 1. `Webhook: clientes do RPA` — POST autenticado por header, responde pelo nó final
-2. `Normalizar clientes` — valida o corpo e converte o saldo de texto para número
+2. `Normalizar clientes` — valida o corpo, converte o saldo para número e fixa o modo
 3. `Buscar investimentos (CSV)` — descarrega o `data.csv` **uma vez**
 4. `Cruzar e recomendar` — cruza por perfil e filtra pelo saldo mínimo
-5. `Mensagem por template` — gera o texto estático para todos os clientes
-6. `Usar IA?` — desvia conforme o campo `usar_ia` do pedido
-7. `Dividir em lotes` + `Aguardar (limite de taxa)` — uma chamada ao modelo por vez
-8. `Gerar mensagem com IA` — agente com modelo principal e modelo de reserva
-9. `Finalizar (IA)` / `Finalizar (template)` — normalizam a saída e marcam a origem
-10. `Responder ao RPA` — devolve as mensagens ao script
+5. `Validar formato e domínio` → `Verificar MX do domínio` → `Consolidar validação`
+6. `Email válido?` — os inválidos saem do fluxo antes de gastarem uma chamada ao modelo
+7. `Mensagem por template` — gera o texto estático para todos os clientes válidos
+8. `Usar IA?` — desvia conforme o campo `usar_ia` do pedido
+9. `Dividir em lotes` + `Aguardar (limite de taxa)` — uma chamada ao modelo por vez
+10. `Gerar mensagem com IA` — agente com modelo principal e modelo de reserva
+11. `Finalizar (IA)` / `Finalizar (template)` — normalizam a saída e marcam a origem
+12. `Juntar resultados` — junta válidos e inválidos para a resposta ser completa
+13. `Responder ao RPA` — devolve o estado de cada cliente ao script
+14. `Rotear entrega` — depois da resposta, separa envios de alertas
+15. `Enviar email (Gmail)` — destinatário conforme o modo
+16. `Agrupar erros` → `Alertar erro no Telegram` — um alerta com todas as falhas
+
+## Modo demo e modo produção
+
+O corpo do pedido traz um campo `modo`:
+
+| Modo | Destinatário do email | Domínios de exemplo |
+| --- | --- | --- |
+| `demo` (por omissão) | o endereço do operador, com `[demo]` no assunto | aceites |
+| `producao` | o endereço real do cliente | bloqueados, com alerta no Telegram |
+
+O email do cliente **nunca é alterado** nos dados. O que muda é para onde o envio vai, e
+isso decide-se no fim, no campo `destinatario_efetivo`.
+
+Omitir o campo, ou enviá-lo com um valor desconhecido, resulta em `demo`. Um fluxo que
+envia correio para fora deve falhar para o lado seguro.
 
 ## Como executar
 
-Importar `n8n/workflow.json` no n8n e criar duas coisas na instância: uma credencial
-*Header Auth* com o cabeçalho `X-RPA-Token` e um token à escolha, e a credencial do
-modelo de linguagem. Depois, na máquina que corre o RPA:
+Importar `n8n/workflow.json` no n8n e criar quatro credenciais na instância: uma
+*Header Auth* com o cabeçalho `X-RPA-Token` e um token à escolha, uma do modelo de
+linguagem, uma do Gmail e uma do Telegram.
+
+No ficheiro publicado, dois valores estão como marcadores e têm de ser substituídos:
+`SEU_CHAT_ID_TELEGRAM` no nó do Telegram, e `operador@exemplo.com` como destinatário por
+omissão do modo demo (que a variável `EMAIL_DEMO` também sobrepõe). São identificadores do
+operador e não têm de viver num repositório público. Depois, na máquina que corre o RPA:
 
 ```bash
 pip install requests beautifulsoup4
 
 export N8N_WEBHOOK_URL="https://SEU_N8N/webhook/dio-investimentos"
 export RPA_TOKEN="o-mesmo-token-da-credencial"
+export EMAIL_DEMO="o-teu@email.com"   # destinatário de tudo em modo demo
 
 python rpa/extrair_clientes.py --dry-run   # extrai e mostra, não envia
-python rpa/extrair_clientes.py             # MVP, mensagens por template
+python rpa/extrair_clientes.py             # MVP: template, emails em modo demo
 python rpa/extrair_clientes.py --com-ia    # mensagens geradas pelo modelo
+python rpa/extrair_clientes.py --producao  # envia para o endereço real do cliente
 ```
 
 O token não está neste repositório de propósito: o webhook fica exposto na internet e

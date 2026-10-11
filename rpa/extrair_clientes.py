@@ -7,12 +7,17 @@ pagina, so HTML.
 
 Uso:
     python extrair_clientes.py --dry-run      # extrai e mostra, nao envia
-    python extrair_clientes.py                # extrai e envia ao n8n
-    python extrair_clientes.py --com-ia       # pede mensagens geradas por LLM
+    python extrair_clientes.py                # modo demo: emails vao para o operador
+    python extrair_clientes.py --com-ia       # mensagens geradas por LLM
+    python extrair_clientes.py --producao     # emails vao para o endereco do cliente
+
+O modo demo e o valor por omissao, de proposito: um fluxo que envia correio para
+fora deve falhar para o lado seguro. Produzir envios reais exige a flag explicita.
 
 Configuracao por variaveis de ambiente (nunca no codigo):
     N8N_WEBHOOK_URL   URL do webhook de producao
     RPA_TOKEN         token do header X-RPA-Token, exigido pelo webhook
+    EMAIL_DEMO        destinatario de todos os emails em modo demo
 """
 
 import argparse
@@ -28,6 +33,7 @@ from bs4 import BeautifulSoup
 URL_PAGINA = "https://digitalinnovationone.github.io/dio-lab-assistente-investimentos-rpa-n8n/"
 WEBHOOK = os.environ.get("N8N_WEBHOOK_URL", "https://SEU_N8N/webhook/dio-investimentos")
 TOKEN = os.environ.get("RPA_TOKEN", "")
+EMAIL_DEMO = os.environ.get("EMAIL_DEMO", "")
 
 TENTATIVAS = 3
 ESPERA_BASE = 2  # segundos, dobra a cada tentativa
@@ -78,7 +84,7 @@ def extrair_clientes() -> list[dict]:
     return clientes
 
 
-def enviar(clientes: list[dict], usar_ia: bool) -> dict:
+def enviar(clientes: list[dict], usar_ia: bool, modo: str) -> dict:
     """Envia os clientes ao webhook, com repeticao em caso de falha de rede."""
     if not TOKEN:
         raise SystemExit(
@@ -87,7 +93,9 @@ def enviar(clientes: list[dict], usar_ia: bool) -> dict:
             "    set -x RPA_TOKEN '...'    (fish)"
         )
 
-    corpo = {"clientes": clientes, "usar_ia": usar_ia}
+    corpo = {"clientes": clientes, "usar_ia": usar_ia, "modo": modo}
+    if EMAIL_DEMO:
+        corpo["email_demo"] = EMAIL_DEMO
     cabecalhos = {"X-RPA-Token": TOKEN, "Content-Type": "application/json"}
 
     for tentativa in range(1, TENTATIVAS + 1):
@@ -112,6 +120,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="RPA de extracao de clientes para o n8n")
     ap.add_argument("--dry-run", action="store_true", help="extrai e mostra, sem enviar")
     ap.add_argument("--com-ia", action="store_true", help="pede ao n8n mensagens geradas por LLM")
+    ap.add_argument("--producao", action="store_true",
+                    help="envia para o endereco real do cliente em vez do operador")
     args = ap.parse_args()
 
     print(f"A abrir {URL_PAGINA}")
@@ -120,23 +130,44 @@ def main() -> None:
     for c in clientes:
         print(f"  {c['nome']:<18} {c['perfil']:<12} {c['saldo_texto']:>13}  ->  {c['saldo']:>10.2f}")
 
+    modo = "producao" if args.producao else "demo"
+
     if args.dry_run:
-        print("\n--dry-run: nada enviado. Corpo que seria enviado:\n")
-        print(json.dumps({"clientes": clientes, "usar_ia": args.com_ia},
+        print(f"\n--dry-run: nada enviado. Corpo que seria enviado (modo={modo}):\n")
+        print(json.dumps({"clientes": clientes, "usar_ia": args.com_ia, "modo": modo},
                          ensure_ascii=False, indent=2)[:600] + "\n  ...")
         return
 
-    print(f"\nA enviar para {WEBHOOK} (usar_ia={args.com_ia})")
-    resultado = enviar(clientes, args.com_ia)
+    if modo == "producao":
+        print("\nMODO PRODUCAO: os emails vao para os enderecos dos clientes.")
+
+    print(f"\nA enviar para {WEBHOOK} (usar_ia={args.com_ia}, modo={modo})")
+    resultado = enviar(clientes, args.com_ia, modo)
 
     mensagens = resultado if isinstance(resultado, list) else resultado.get("mensagens", resultado)
     print(f"\nResposta do n8n:\n")
     if isinstance(mensagens, list):
+        enviados, bloqueados = [], []
         for m in mensagens:
-            print(f"--- {m.get('nome', '?')} ({m.get('perfil', '?')}) "
-                  f"-> {m.get('produto_recomendado', '?')}")
-            print(f"{m.get('mensagem', '')}\n")
-        print(f"{len(mensagens)} mensagens recebidas.")
+            if m.get("email_valido"):
+                enviados.append(m)
+                print(f"--- {m.get('nome', '?')} ({m.get('perfil', '?')}) "
+                      f"-> {m.get('produto_recomendado', '?')}")
+                print(f"    email para: {m.get('destinatario_efetivo')}  "
+                      f"[origem: {m.get('origem', '?')}]")
+                print(f"{m.get('mensagem', '')}\n")
+            else:
+                bloqueados.append(m)
+
+        if bloqueados:
+            print(f"{len(bloqueados)} cliente(s) sem envio, alertados no Telegram:")
+            for m in bloqueados:
+                print(f"  {m.get('nome', '?')} <{m.get('email', '?')}>")
+                print(f"    {m.get('erro_validacao')}")
+            print()
+
+        print(f"{len(mensagens)} clientes processados: "
+              f"{len(enviados)} email(s), {len(bloqueados)} bloqueado(s).")
     else:
         print(json.dumps(mensagens, ensure_ascii=False, indent=2)[:1500])
 
