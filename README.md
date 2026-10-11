@@ -155,6 +155,13 @@ Output do `Finalizar (IA)` numa corrida com `--com-ia`. A mensagem da Elena foi 
 pelo modelo, a partir do perfil, do saldo e do produto que o código já tinha escolhido, e
 o campo `origem` regista isso com `"ia"`.
 
+![Outra mensagem gerada pelo modelo, para outro cliente](prints/09-ia-outra-mensagem.png)
+
+Outro cliente da mesma corrida. O texto é diferente — o modelo escreve cada mensagem de
+raiz — mas o produto, a rentabilidade e a aplicação mínima são os que o nó
+`Cruzar e recomendar` já tinha decidido. A decisão de investimento é da regra, não do
+modelo; o modelo só a escreve.
+
 ![Saída do mesmo nó numa mensagem recuperada pelo template](prints/07-ia-fallback.png)
 
 A mesma execução, outro cliente. O modelo não respondeu a esta chamada — limite de taxa do
